@@ -16,13 +16,20 @@ async function processChat(bot, username, message) {
   const historyText = chatHistory
     .map((h) => `${h.username}: ${h.message} -> ${h.response}`)
     .join("\n");
-  const prompt = `You’re a chill, casual Minecraft bot. Parse this natural language message into a command or chat response:
-  - If it’s a task, return "command: get <quantity> <block>" (e.g., "command: get 5 oak_log") using Minecraft block names (e.g., dirt, stone, oak_log). Convert word numbers (e.g., "four" to "4").
-  - If it’s conversation, return "chat: <response>" (e.g., "chat: Yo, what’s good?").
+  const prompt = `You’re a chill, casual Minecraft bot. Parse this natural language message into a command or chat response using these options:
+  - "command: get <quantity> <block>" (e.g., "command: get 5 oak_log") for gathering blocks. Convert word numbers (e.g., "four" to "4").
+  - "command: drop <quantity> <item>" (e.g., "command: drop 5 dirt") for dropping items.
+  - "command: follow" for following the player.
+  - "command: stop" to pause actions.
+  - "command: continue" to resume tasks.
+  - "command: cancel" to clear all tasks.
+  - "chat: <response>" (e.g., "chat: Yo, what’s good?") for conversation.
   Keep it short and casual. Use this chat history for context (if relevant):
   ${historyText}
   Examples:
   - "get four oak logs" → "command: get 4 oak_log"
+  - "drop me 5 dirt" → "command: drop 5 dirt"
+  - "follow me" → "command: follow"
   - "hi there" → "chat: Hey, what’s up?"
   Message: "${message}"`;
 
@@ -67,6 +74,16 @@ async function processChat(bot, username, message) {
       );
       console.log("Parsed action:", action);
 
+      if (action === "follow") {
+        bot.logChat("On my way, dude!");
+        isPaused = true;
+        currentTask = null;
+        bot.pathfinder.stop();
+        await followPlayer(bot, username);
+        addToHistory(username, message, "On my way, dude!");
+        return;
+      }
+
       if (action.includes("stop")) {
         bot.logChat("Chill, I’m stopping!");
         isPaused = true;
@@ -74,23 +91,34 @@ async function processChat(bot, username, message) {
         addToHistory(username, message, "Chill, I’m stopping!");
         return;
       }
-      if (action.includes("follow me") || action.includes("come here")) {
-        bot.logChat("On my way, dude!");
-        isPaused = true;
-        bot.pathfinder.stop();
-        followPlayer(bot, username);
-        addToHistory(username, message, "On my way, dude!");
+
+      if (action.includes("drop")) {
+        const parts = action.split(" ");
+        const count = parseInt(parts[1]) || 1;
+        const itemType = parts[2] || null;
+        console.log("Queueing:", {
+          type: "dropItems",
+          count,
+          itemType,
+          username,
+        });
+        taskQueue.push({ type: "dropItems", count, itemType, username });
+        bot.logChat(
+          `Queued up dropping ${count} ${
+            itemType || "items"
+          } — I'll bring them to you!`
+        );
+        addToHistory(
+          username,
+          message,
+          `Queued up dropping ${count} ${
+            itemType || "items"
+          } — I'll bring them to you!`
+        );
+        if (!isPaused && !currentTask) processQueue(bot, bot.mcData);
         return;
       }
-      if (action.includes("drop me")) {
-        const count = parseInt(action.match(/\d+/)?.[0]) || 1;
-        bot.logChat(`Dropping ${count} items, here ya go!`);
-        isPaused = true;
-        bot.pathfinder.stop();
-        dropItems(bot, count).then(() => (isPaused = false));
-        addToHistory(username, message, `Dropping ${count} items, here ya go!`);
-        return;
-      }
+
       if (action.includes("continue") || action.includes("go back")) {
         bot.logChat("Back to it, then!");
         isPaused = false;
@@ -98,10 +126,8 @@ async function processChat(bot, username, message) {
         addToHistory(username, message, "Back to it, then!");
         return;
       }
-      if (
-        action.includes("stop working") ||
-        action.includes("cancel everything")
-      ) {
+
+      if (action.includes("cancel")) {
         bot.logChat("Alright, I’m done with all that!");
         taskQueue = [];
         isPaused = false;
@@ -112,9 +138,9 @@ async function processChat(bot, username, message) {
       }
 
       if (action.includes("get")) {
-        const quantityMatch = action.match(/\d+/) || ["5"]; // Default to 5 if no number
+        const quantityMatch = action.match(/\d+/) || ["5"];
         const quantity = parseInt(quantityMatch[0]);
-        const blockType = action.split(" ").slice(2).join("_") || "dirt"; // Fallback to dirt
+        const blockType = action.split(" ").slice(2).join("_") || "dirt";
         console.log("Queueing:", { type: "getBlock", quantity, blockType });
         taskQueue.push({ type: "getBlock", quantity, blockType });
         bot.logChat(
@@ -155,10 +181,35 @@ async function processQueue(bot, mcData) {
 
   currentTask = taskQueue.shift();
   console.log("Processing task:", currentTask);
-  if (currentTask.type === "getBlock") {
-    await getBlock(bot, currentTask.quantity, currentTask.blockType, mcData);
+
+  try {
+    switch (currentTask.type) {
+      case "getBlock":
+        await getBlock(
+          bot,
+          currentTask.quantity,
+          currentTask.blockType,
+          mcData
+        );
+        break;
+      case "dropItems":
+        await dropItems(
+          bot,
+          currentTask.count,
+          currentTask.itemType,
+          currentTask.username
+        );
+        break;
+      default:
+        console.log("Unknown task type:", currentTask.type);
+    }
+  } catch (error) {
+    console.error("Error processing task:", error);
+    bot.logChat("Oops, something went wrong with that task!");
   }
+
   currentTask = null;
+  isPaused = false;
   processQueue(bot, mcData);
 }
 
