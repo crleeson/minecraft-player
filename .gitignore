@@ -1,0 +1,12 @@
+# Ignore node_modules (dependencies are installed via npm)
+node_modules/
+
+# Ignore environment variables file
+.env
+
+# Ignore logs or temp files (if you add any later)
+*.log
+*.tmp
+
+# Ignore VSCode settings (optional, if you don’t want to share them)
+.vscode/
